@@ -150,238 +150,75 @@ class PathPlanning:
     #     return obs_tensor
 
     def plan_path(self, init, target):
+        Observation = self._get_obs()
+
+        start = (int(init[0]/self.scale_factor_waypoint_w), int(init[2]/self.scale_factor_waypoint_h))
+        goal = (int(target[0]/self.scale_factor_waypoint_w), int(target[2]/self.scale_factor_waypoint_h))
+
+        start_z = init[1]
+        goal_z = target[1]
+
+        ort_session = ort.InferenceSession(self.onnx_path)
+        action = ort_session.run(None, {"observation": Observation})
+        action = np.clip(action, -1, 1)
+
+        direction_vector = np.array(goal) - np.array(start)
+        direction_vector = direction_vector / np.linalg.norm(direction_vector)
+        perpendicular_vector = np.array([-direction_vector[1], direction_vector[0]])
+
+        waypoints = np.linspace(start, goal, self.n_waypoints)
+
+        for i in range(len(waypoints)):
+            waypoints[i] += action[0][0][i] * perpendicular_vector * self.scale_factor
+            waypoints[i] = np.clip(waypoints[i], [0, 0],
+                                   [self.heightmap_resized.shape[0] - 1, self.heightmap_resized.shape[1] - 1])
+
+        agent1_path = waypoints.astype(int).tolist()
+        dijkstra_path = self.find_shortest_path(agent1_path)
+        cnn_path = [start] + dijkstra_path + [goal]
+        cnn_real_path = [start] + agent1_path + [goal]
+
+        cnn_path = np.array(cnn_path)
+        cnn_real_path = np.array(cnn_real_path)
+
+        # Calculate z values based on heightmap
+        #path_z = np.array([self.heightmap_resized[int(point[0]), int(point[1])] for point in cnn_real_path])
+        # agent1_path_z = np.array([self.heightmap_resized[int(point[0]), int(point[1])] for point in agent1_path]) + self.z_factor
+        for i in range(len(agent1_path)):
+            agent1_path[i][0] = agent1_path[i][0] * self.scale_factor_waypoint_w
+            agent1_path[i][1] = agent1_path[i][1] * self.scale_factor_waypoint_h
         
-        ### path planning by learning ###
-        # Observation = self._get_obs()
+        agent1_path_z = np.array([self.heightmap[int(point[0]), int(point[1])] for point in agent1_path])*0.1 + self.z_factor
+        path_z = np.insert(agent1_path_z, 0, start_z)
+        path_z = np.append(path_z, goal_z)
+        path_z = np.float64(path_z)
 
-        # start = (int(init[0]/self.scale_factor_waypoint_w), int(init[2]/self.scale_factor_waypoint_h))
-        # goal = (int(target[0]/self.scale_factor_waypoint_w), int(target[2]/self.scale_factor_waypoint_h))
-
-        # start_z = init[1]
-        # goal_z = target[1]
-
-        # ort_session = ort.InferenceSession(self.onnx_path)
-        # action = ort_session.run(None, {"observation": Observation})
-        # action = np.clip(action, -1, 1)
-
-        # direction_vector = np.array(goal) - np.array(start)
-        # direction_vector = direction_vector / np.linalg.norm(direction_vector)
-        # perpendicular_vector = np.array([-direction_vector[1], direction_vector[0]])
-
-        # waypoints = np.linspace(start, goal, self.n_waypoints)
-
-        # for i in range(len(waypoints)):
-        #     waypoints[i] += action[0][0][i] * perpendicular_vector * self.scale_factor
-        #     waypoints[i] = np.clip(waypoints[i], [0, 0],
-        #                            [self.heightmap_resized.shape[0] - 1, self.heightmap_resized.shape[1] - 1])
-
-        # agent1_path = waypoints.astype(int).tolist()
-        # dijkstra_path = self.find_shortest_path(agent1_path)
-        # cnn_path = [start] + dijkstra_path + [goal]
-        # cnn_real_path = [start] + agent1_path + [goal]
-
-        # cnn_path = np.array(cnn_path)
-        # cnn_real_path = np.array(cnn_real_path)
-
-        # # Calculate z values based on heightmap
-        # #path_z = np.array([self.heightmap_resized[int(point[0]), int(point[1])] for point in cnn_real_path])
-        # # agent1_path_z = np.array([self.heightmap_resized[int(point[0]), int(point[1])] for point in agent1_path]) + self.z_factor
-        # for i in range(len(agent1_path)):
-        #     agent1_path[i][0] = agent1_path[i][0] * self.scale_factor_waypoint_w
-        #     agent1_path[i][1] = agent1_path[i][1] * self.scale_factor_waypoint_h
-        
-        # agent1_path_z = np.array([self.heightmap[int(point[0]), int(point[1])] for point in agent1_path])*0.1 + self.z_factor
-        # path_z = np.insert(agent1_path_z, 0, start_z)
-        # path_z = np.append(path_z, goal_z)
-        # path_z = np.float64(path_z)
-
-        # # Apply z_factor
-        # # path_z = path_z + self.z_factor
+        # Apply z_factor
+        # path_z = path_z + self.z_factor
 
 
-        # self.path_x_learning = cnn_real_path[:, 0]
-        # self.path_y_learning = cnn_real_path[:, 1]
-        # self.path_z_learning = path_z
+        self.path_x_learning = cnn_real_path[:, 0]
+        self.path_y_learning = cnn_real_path[:, 1]
+        self.path_z_learning = path_z
 
-        # self.path_x = cnn_real_path[:, 0] * self.scale_factor_waypoint_w
-        # self.path_y = cnn_real_path[:, 1] * self.scale_factor_waypoint_h
-        # self.path_z = path_z
-        # self.path_x,self.path_y,self.path_z = self.add_waypoint_main(self.path_x,self.path_y,self.path_z,self.heightmap)
+        self.path_x = cnn_real_path[:, 0] * self.scale_factor_waypoint_w
+        self.path_y = cnn_real_path[:, 1] * self.scale_factor_waypoint_h
+        self.path_z = path_z
 
-        ### path planning by pso ###
-        start_pso = np.array([[init[0], init[2]]])
-        goal_pso = np.array([[target[0], target[2]]])
+        self.path_x,self.path_y,self.path_z = self.add_waypoint_main_2(self.path_x,self.path_y,self.path_z,self.heightmap*0.1)
 
-        # gBest_value, waypoint = self.pso_single(self.heightmap*self.h_origin, start_pso, goal_pso, self.h_origin)
-        gBest_value, waypoint = self.pso_single(self.heightmap*0.1, start_pso, goal_pso, self.h_origin)
-        self.path_x_pso = waypoint[:,0]
-        self.path_y_pso = waypoint[:,1]
-
-        self.path_z_pso = np.array([self.heightmap[int(point[0]), int(point[1])] for point in waypoint])*0.1 + self.z_factor
-        self.path_x = self.path_x_pso
-        self.path_y = self.path_y_pso
-        self.path_z = self.path_z_pso
-        # self.path_x,self.path_y,self.path_z = self.add_waypoint_main(self.path_x_pso,self.path_y_pso,self.path_z_pso,self.heightmap*0.1)
-        
-        ### OUTPUT ###
-        # path_final_3D_learning_model = np.column_stack((self.path_x_learning, self.path_y_learning, self.path_z_learning)) # output path of learning model scaled target size
+        path_final_3D_learning_model = np.column_stack((self.path_x_learning, self.path_y_learning, self.path_z_learning)) # output path of learning model scaled target size
         path_final_3D = np.column_stack((self.path_x, self.path_y, self.path_z)) # real path
 
-        # print("Output path of learning model :",path_final_3D_learning_model)
+        print("Output path of learning model :",path_final_3D_learning_model)
         print("Output Real Path", path_final_3D)
 
         # 경로생성 결과 확인용        
         self.plot_path_2d("/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/Results_Images/path_2d.png")
         self.plot_path_3d("/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/Results_Images/path_3d.png")
-        # self.plot_path_2d_learning("/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/Results_Images/path_2d_learning.png")
-        # self.plot_path_3d_learning("/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/Results_Images/path_3d_learning.png")
+        self.plot_path_2d_learning("/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/Results_Images/path_2d_learning.png")
+        self.plot_path_3d_learning("/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/Results_Images/path_3d_learning.png")
 
-    def pso_single(self,heightmap, Start, Goal, length_heightmap): # height map scale : 0 ~ max height(heightmap size)
-        #start_time = time.time()
-        num_particles = 20
-        num_waypoints = 6
-        num_dimensions = 1
-        dimensionality = num_waypoints * num_dimensions
-        max_iter = 15000
-        w = 0.51
-        c1 =2
-        c2 =2
-        
-        vertical_length_st = 120 # map size : 1024-1024 -> 120 , map size : 788 -> 80
-        
-        height_start = heightmap[round(Start[0][0]), round(Start[0][1])]
-        height_goal = heightmap[round(Goal[0][0]), round(Goal[0][1])]
-
-        # initialize 
-        x = np.random.rand(num_particles, dimensionality) * 2 - 1
-        v = np.zeros((num_particles, dimensionality))
-        pBest = x
-
-        pBest_value = self.cost_cal(Start, Goal, x, num_particles, num_waypoints, heightmap, vertical_length_st, length_heightmap)
-        idx = np.argmin(pBest_value)
-        gBest_value = np.min(pBest_value)
-        gBest = pBest[idx, :]
-
-        for iter in range(max_iter):
-            r1 = np.random.rand(num_particles, dimensionality)
-            r2 = np.random.rand(num_particles, dimensionality)
-
-            v = w * v + c1 * r1 * (pBest - x) + c2 * r2 * (gBest - x)
-            x = x + v
-            x = np.maximum(-1, np.minimum(1, x))
-
-            current_value = self.cost_cal(Start, Goal, x, num_particles, num_waypoints, heightmap, vertical_length_st, length_heightmap)
-            idx = current_value < pBest_value
-            pBest[idx, :] = x[idx, :]
-            pBest_value[idx] = current_value[idx]
-
-            idx = np.argmin(pBest_value)
-            current_min_value = np.min(pBest_value)
-            if current_min_value < gBest_value:
-                gBest = pBest[idx, :]
-                gBest_value = np.min(pBest_value)
-            
-            end_condition = pBest_value - gBest_value
-            if np.sum(np.abs(end_condition)) <=0.5:
-                break
-        #cal_time = time.time() - start_time
-
-        # g_Best -> waypoint 
-        height_Start = heightmap[round(Start[0][0]), round(Start[0][1])]
-        height_Goal = heightmap[round(Goal[0][0]), round(Goal[0][1])]
-        
-        Start_3D = np.array([[Start[0][0], Start[0][1], height_Start]])
-        Goal_3D = np.array([[Goal[0][0], Goal[0][1], height_Goal]])
-        
-        vec_straight_2D = Goal - Start
-        vec_straight_3D = Goal_3D - Start_3D
-        
-        dist_straight_2D = np.linalg.norm(vec_straight_2D)
-        dist_straight_3D = np.linalg.norm(vec_straight_3D)
-        
-        vec_vertical = np.array([[-vec_straight_2D[0][1], vec_straight_2D[0][0]]]) / dist_straight_2D
-        
-        
-        length_vertical = gBest[:] * vertical_length_st
-        standard_point = np.zeros((num_waypoints, 2))
-        waypoint = np.zeros((num_waypoints, 2))
-        for k in range(num_waypoints):
-            standard_point[k, :] = Start + (Goal - Start) * (k / (num_waypoints + 1))
-            waypoint[k,:] = standard_point[k,:] + length_vertical[k] * vec_vertical
-            waypoint[k,0] = np.maximum(1, np.minimum(waypoint[k,0], length_heightmap))
-            waypoint[k,1] = np.maximum(1, np.minimum(waypoint[k,1], length_heightmap))
-
-        waypoint = np.concatenate((Start, waypoint), axis=0)
-        waypoint = np.concatenate((waypoint, Goal), axis=0)
-
-        return gBest_value, waypoint
-
-    def cost_cal(self,Start, Goal, x, num_particles, num_waypoints, heightmap, length_vertical_st, length_heightmap):
-    
-        height_Start = heightmap[round(Start[0][0]), round(Start[0][1])]
-        height_Goal = heightmap[round(Goal[0][0]), round(Goal[0][1])]
-        
-        Start_3D = np.array([[Start[0][0], Start[0][1], height_Start]])
-        Goal_3D = np.array([[Goal[0][0], Goal[0][1], height_Goal]])
-        
-        vec_straight_2D = Goal - Start
-        vec_straight_3D = Goal_3D - Start_3D
-        
-        dist_straight_2D = np.linalg.norm(vec_straight_2D)
-        dist_straight_3D = np.linalg.norm(vec_straight_3D)
-        
-        vec_vertical = np.array([[-vec_straight_2D[0][1], vec_straight_2D[0][0]]]) / dist_straight_2D
-        Cost_value = np.zeros((num_particles, 1))
-        
-        num_interp = 10
-        
-        for i in range(num_particles):
-            length_vertical = x[i, :] * length_vertical_st
-            standard_point = np.zeros((num_waypoints, 2))
-            waypoint = np.zeros((num_waypoints, 2))
-            for k in range(num_waypoints):
-                standard_point[k, :] = Start + (Goal - Start) * (k / (num_waypoints + 1))
-                waypoint[k,:] = standard_point[k,:] + length_vertical[k] * vec_vertical
-                waypoint[k,0] = np.maximum(1, np.minimum(waypoint[k,0], length_heightmap))
-                waypoint[k,1] = np.maximum(1, np.minimum(waypoint[k,1], length_heightmap))
-
-            waypoint = np.concatenate((Start, waypoint), axis=0)
-            waypoint = np.concatenate((waypoint, Goal), axis=0)
-
-            all_points = Start # Start point add
-            
-            rows, cols = waypoint.shape
-            for wp in range(rows-1):
-                for j in range(num_interp):
-                    t = j / (num_interp + 1)
-                    interp_point = waypoint[wp,:] * (1-t) + waypoint[wp+1,:] * t
-                    interp_point = interp_point.reshape(1, 2)
-                    all_points = np.concatenate((all_points, interp_point), axis=0)
-
-            all_points = np.concatenate((all_points, Goal), axis=0) # Goal point add
-            rows, cols = all_points.shape
-            
-            dist_total = 0
-            for j in range(rows-1):
-                p1 = all_points[j,:]
-                p2 = all_points[j+1,:]
-
-                p1 = np.maximum(1, np.minimum(p1, length_heightmap))
-                p2 = np.maximum(1, np.minimum(p2, length_heightmap))
-
-                height1 = heightmap[round(p1[0]), round(p1[1])]
-                height2 = heightmap[round(p2[0]), round(p2[1])]
-
-                p1_3D = np.array([[p1[0], p1[1], height1]])
-                p2_3D = np.array([[p2[0], p2[1], height2]])
-
-                dist = np.linalg.norm(p2_3D - p1_3D)
-                dist_total = dist_total + dist
-            path_ratio = dist_total / dist_straight_3D
-            Cost_value[i] = path_ratio
-            Cost_value = Cost_value.reshape(-1)
-            
-        return Cost_value
 
     def add_waypoint(self,i,index,result_x,result_y,result_z,terrain_z):
         return_x = []
