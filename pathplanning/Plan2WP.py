@@ -1190,7 +1190,7 @@ class PathPlanningServer(Node):  # topic 이름과 message 타입은 서로 매�
         # added by controller
         # file path
         self.image_path = "/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/map/512-001.png"
-        self.model_path = "/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/model/SAC_ver2.onnx"
+        self.model_path = "/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/model/weight.onnx"
 
         # path plannig complete flag
         self.path_plannig_start = False  # flag whether path planning start
