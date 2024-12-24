@@ -48,8 +48,8 @@ class PathPlanning:
         self.onnx_path = onnx_path
         self.heightmap_path = heightmap_path
 
-        self.start_z = start[1]
-        self.goal_z = goal[1]
+        self.start_z = start[2]
+        self.goal_z = goal[2]
         self.image_size = image_size
 
         self.n_waypoints = n_waypoints
@@ -70,11 +70,11 @@ class PathPlanning:
             self.original_heightmap.shape[0] / self.heightmap.shape[0]
         )  # Scale Factor of waypoint
         self.start = [
-            start[2] / self.scale_factor_waypoint_x,
+            start[1] / self.scale_factor_waypoint_x,
             start[0] / self.scale_factor_waypoint_y,
         ]
         self.goal = [
-            goal[2] / self.scale_factor_waypoint_x,
+            goal[1] / self.scale_factor_waypoint_x,
             goal[0] / self.scale_factor_waypoint_y,
         ]
 
@@ -293,28 +293,32 @@ class PathPlanning:
 
         # 최종 결과 저장
         onnx_path = self.current_agent1_path
-        print(onnx_path)
         self.path_x_learning = [p[1] for p in onnx_path]
         self.path_y_learning = [p[0] for p in onnx_path]
         self.path_z_learning = [
             self.heightmap[int(p[0]), int(p[1])] + self.z_factor for p in onnx_path
         ]
 
-        self.path_x = [p[1] * self.scale_factor_waypoint_x for p in onnx_path]
-        self.path_y = [p[0] * self.scale_factor_waypoint_y for p in onnx_path]
-        self.path_z = [
+        self.scaled_path_x = [p[1] * self.scale_factor_waypoint_x for p in onnx_path]
+        self.scaled_path_y = [p[0] * self.scale_factor_waypoint_y for p in onnx_path]
+        self.scaled_path_z = [
             self.original_heightmap[
                 int(p[0] * self.scale_factor_waypoint_y),
                 int(p[1] * self.scale_factor_waypoint_x),
             ]
             * 0.1
-            + self.z_factor
             for p in onnx_path
         ]
-        self.path_z[0] = self.start_z
-        self.path_z[-1] = self.goal_z
-        # self.path_x,self.path_y,self.path_z = self.add_waypoint_main_2(self.path_x,self.path_y,self.path_z,self.heightmap*0.1)
+        self.scaled_path_z[0] = self.start_z
+        self.scaled_path_z[-1] = self.goal_z
 
+        self.path_y, self.path_x, self.path_z = self.add_waypoint_main_2(
+            self.scaled_path_y,
+            self.scaled_path_x,
+            self.scaled_path_z,
+            self.original_heightmap * 0.1,
+        )
+        self.path_z = self.path_z + self.z_factor
         path_final_3D_learning_model = np.column_stack(
             (self.path_x_learning, self.path_y_learning, self.path_z_learning)
         )  # output path of learning model scaled target size
@@ -726,7 +730,7 @@ class PathPlanning:
         x = np.arange(0, self.original_heightmap.shape[1], 1)
         y = np.arange(0, self.original_heightmap.shape[0], 1)
         X, Y = np.meshgrid(x, y)
-        ax.plot_surface(X, Y, self.original_heightmap, cmap="terrain", alpha=0.5)
+        ax.plot_surface(X, Y, self.original_heightmap * 0.1, cmap="terrain", alpha=0.5)
 
         # Plot the path
         ax.plot(self.path_x, self.path_y, self.path_z, "r-", linewidth=2)
@@ -1328,9 +1332,9 @@ class PathPlanningServer(Node):  # topic 이름과 message 타입은 서로 매�
 
                     # setting msg
                     self.path_planning_complete = True
-                    self.waypoint_x = planner.path_x
-                    self.waypoint_y = planner.path_y
-                    self.waypoint_z = planner.path_z
+                    self.waypoint_x = planner.path_x.tolist()
+                    self.waypoint_y = planner.path_y.tolist()
+                    self.waypoint_z = planner.path_z.tolist()
 
                     print("+++++++++++++++++++++++++++++")
                     print(self.waypoint_x)
