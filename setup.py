@@ -4,7 +4,7 @@ package_name = 'pathplanning'
 
 setup(
     name=package_name,
-    version='0.1.0',
+    version='sac-v2.0.0',
     packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -13,9 +13,9 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='kestrel',
+    maintainer='kestrel, Inha University Aerospace Control and Systems Laboratory',
     maintainer_email='kestrel@inha.edu',
-    description='TODO: Package description',
+    description='Aware4 - Vehicle Awareness Intelligence: Path Planning Algorithm',
     license='MIT',
     tests_require=['pytest'],
     entry_points={
