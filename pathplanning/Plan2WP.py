@@ -25,6 +25,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import os
+import torch  # For Excution Time
 
 #############################################################################################################
 # added by controller
@@ -273,6 +274,110 @@ class PathPlanning:
 
         return obs, info
 
+    def calculate_3d_path_reward2_og_og(self, path):
+        if not path:
+            return -1000, float("inf")
+
+        # 보간점 개수 설정
+        num_interp = 10  # waypoint 사이의 보간점 개수
+
+        def interpolate_points(p1, p2, num_points):
+            """두 점 사이에 보간점 생성"""
+            points = []
+            for i in range(num_points + 2):  # +2는 시작점과 끝점 포함
+                t = i / (num_points + 1)
+                x = p1[0] * (1 - t) + p2[0] * t
+                y = p1[1] * (1 - t) + p2[1] * t
+                points.append((x, y))
+            return points
+
+        def calculate_segment_distance(p1, p2):
+            """두 점 사이의 3D 유클리드 거리 계산"""
+            x1, y1 = p1
+            x2, y2 = p2
+            # 좌표가 이미지 범위 내에 있는지 확인
+            x1 = min(max(0, x1), self.heightmap.shape[0] - 1)
+            y1 = min(max(0, y1), self.heightmap.shape[1] - 1)
+            x2 = min(max(0, x2), self.heightmap.shape[0] - 1)
+            y2 = min(max(0, y2), self.heightmap.shape[1] - 1)
+
+            # 높이값 계산
+            z1 = self.heightmap[int(x1), int(y1)] * self.z_scale
+            z2 = self.heightmap[int(x2), int(y2)] * self.z_scale
+
+            # 3D 유클리드 거리
+            return np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2 + (z2 - z1) ** 2)
+
+        def calculate_path_length(points):
+            """경로의 3D 길이를 계산"""
+            if len(points) < 2:
+                return 0
+
+            # 모든 waypoint 사이에 보간점 추가
+            interpolated_path = []
+            for i in range(len(points) - 1):
+                # 현재 waypoint 쌍에 대한 보간점 생성
+                interp_points = interpolate_points(points[i], points[i + 1], num_interp)
+                # 마지막 점(다음 waypoint)을 제외하고 추가
+                interpolated_path.extend(interp_points[:-1])
+            # 마지막 waypoint 추가
+            interpolated_path.append(points[-1])
+
+            # 전체 보간된 경로에 대해 연속적으로 거리 계산
+            total_length = 0
+            for i in range(len(interpolated_path) - 1):
+                total_length += calculate_segment_distance(
+                    interpolated_path[i], interpolated_path[i + 1]
+                )
+
+            return total_length
+
+        # 1. 시작점과 도착점 사이의 직선 거리 계산 (보간 없이)
+        reference_length = calculate_segment_distance(self.start, self.goal)
+
+        if reference_length == 0:  # 시작점과 도착점이 같은 경우
+            return -1000, float("inf")
+
+        # 2. 실제 경로 길이 계산 (보간점 사용)
+        actual_length = calculate_path_length(path)
+
+        # 3. 경로 비율 계산
+        path_ratio = actual_length / reference_length
+
+        # 4. 보상 계산
+        if path_ratio >= 3.0:
+            reward = -200  # 극단적 패널티 감소
+        else:
+            # 더 점진적인 보상 구조
+            base_reward = 1000 * np.exp(-0.5 * (path_ratio - 1.0))
+
+            reward = base_reward
+
+        return reward, path_ratio
+
+    def calculate_real_path_ratio(self, path_x, path_y, path_z):
+        def calculate_segment_distance(p1_x, p1_y, p1_z, p2_x, p2_y, p2_z):
+            return np.sqrt((p2_x - p1_x) ** 2 + (p2_y - p1_y) ** 2 + (p2_z - p1_z) ** 2)
+
+        # Calculate total path length
+        total_length = 0
+        for i in range(len(path_x) - 1):
+            total_length += calculate_segment_distance(
+                path_x[i],
+                path_y[i],
+                path_z[i],
+                path_x[i + 1],
+                path_y[i + 1],
+                path_z[i + 1],
+            )
+
+        # Calculate direct distance
+        direct_distance = calculate_segment_distance(
+            path_x[0], path_y[0], path_z[0], path_x[-1], path_y[-1], path_z[-1]
+        )
+
+        return total_length / direct_distance if direct_distance > 0 else float("inf")
+
     def plan_path(self):
 
         # ONNX Path planning
@@ -281,18 +386,36 @@ class PathPlanning:
         onnx_obs, info = self.reset()  # reset은 이미 설정된 start, goal을 사용
         onnx_obs = self._get_obs()
 
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        total_gpu_time = 0
+
         done = False
         while not done:
-
             onnx_obs = onnx_obs.astype(np.float32)
             onnx_obs = np.expand_dims(onnx_obs, axis=0)
-            onnx_action = ort_session.run(None, {"observation": onnx_obs})[1]
+            start_event.record()
+            with torch.cuda.amp.autocast():
+                onnx_action = ort_session.run(None, {"observation": onnx_obs})[1]
+
+            end_event.record()
+            torch.cuda.synchronize()
+            gpu_time = start_event.elapsed_time(end_event)
+            total_gpu_time += gpu_time
 
             # 환경 스텝 진행
             onnx_obs, done, _ = self.step(onnx_action)
 
+        onnx_processing_time = total_gpu_time / 1000.0
+        print("ONNX Processing Time [sec] :", onnx_processing_time)
+
         # 최종 결과 저장
         onnx_path = self.current_agent1_path
+        final_onnx_reward, onnx_path_ratio = self.calculate_3d_path_reward2_og_og(
+            self.current_agent1_path
+        )
+        print("ONNX Path Ratio :", onnx_path_ratio)
+
         self.path_x_learning = [p[1] for p in onnx_path]
         self.path_y_learning = [p[0] for p in onnx_path]
         self.path_z_learning = [
@@ -326,6 +449,10 @@ class PathPlanning:
             (self.path_x, self.path_y, self.path_z)
         )  # real path
 
+        final_path_ratio = self.calculate_real_path_ratio(
+            self.path_x, self.path_y, self.path_z
+        )
+        print("Final Path Ratio :", final_path_ratio)
         print("Output path of learning model :", path_final_3D_learning_model)
         print("Output Real Path", path_final_3D)
 
