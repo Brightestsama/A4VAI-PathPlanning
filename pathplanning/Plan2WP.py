@@ -25,7 +25,8 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import os
-import torch  # For Excution Time
+import time
+import tracemalloc
 
 #############################################################################################################
 # added by controller
@@ -379,35 +380,39 @@ class PathPlanning:
         return total_length / direct_distance if direct_distance > 0 else float("inf")
 
     def plan_path(self):
+        # Memory Usage Check
+        tracemalloc.start()
+
+        # Start Processing Time Check
+        start_times = os.times()
+        wall_clock_start = time.time()
 
         # ONNX Path planning
         ort_session = ort.InferenceSession(self.onnx_path)
+
         # environment reset
         onnx_obs, info = self.reset()  # reset은 이미 설정된 start, goal을 사용
         onnx_obs = self._get_obs()
-
-        start_event = torch.cuda.Event(enable_timing=True)
-        end_event = torch.cuda.Event(enable_timing=True)
-        total_gpu_time = 0
 
         done = False
         while not done:
             onnx_obs = onnx_obs.astype(np.float32)
             onnx_obs = np.expand_dims(onnx_obs, axis=0)
-            start_event.record()
-            with torch.cuda.amp.autocast():
-                onnx_action = ort_session.run(None, {"observation": onnx_obs})[1]
-
-            end_event.record()
-            torch.cuda.synchronize()
-            gpu_time = start_event.elapsed_time(end_event)
-            total_gpu_time += gpu_time
+            onnx_action = ort_session.run(None, {"observation": onnx_obs})[1]
 
             # 환경 스텝 진행
             onnx_obs, done, _ = self.step(onnx_action)
 
-        onnx_processing_time = total_gpu_time / 1000.0
-        print("ONNX Processing Time [sec] :", onnx_processing_time)
+        # END Processing Time Check
+        end_times = os.times()
+        wall_clock_end = time.time()
+        user_time = end_times.user - start_times.user
+        system_time = end_times.system - start_times.system
+        elapsed_wall_clock = wall_clock_end - wall_clock_start
+
+        print("ONNX Processing User CPU Time [sec] :", user_time)
+        print("ONNX Processing System CPU Time [sec] :", system_time)
+        print("ONNX Processing Wall-Clock Time [sec] :", elapsed_wall_clock)
 
         # 최종 결과 저장
         onnx_path = self.current_agent1_path
@@ -455,6 +460,11 @@ class PathPlanning:
         print("Final Path Ratio :", final_path_ratio)
         print("Output path of learning model :", path_final_3D_learning_model)
         print("Output Real Path", path_final_3D)
+
+        # Memory Check END
+        current, peak = tracemalloc.get_traced_memory()
+        print(f"Current Memory Usage : {current / (1024*1024):.2f} MB")
+        print(f"Peak Memory Usage : {peak / (1024*1024):.2f} MB")
 
         # Check if /home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/Results_Images exists
         if not os.path.exists(
