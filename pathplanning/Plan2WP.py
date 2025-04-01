@@ -16,8 +16,6 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool
 import numpy as np
-import onnx
-import onnxruntime as ort
 import cv2
 from gymnasium import spaces
 import torch.nn.functional as F
@@ -27,6 +25,9 @@ from mpl_toolkits.mplot3d import Axes3D
 import os
 import time
 import tracemalloc
+import tensorrt as trt
+import pycuda.autoinit
+import pycuda.driver as cuda
 
 #############################################################################################################
 # added by controller
@@ -37,7 +38,7 @@ from custom_msgs.msg import GlobalWaypointSetpoint, LocalWaypointSetpoint
 class PathPlanning:
     def __init__(
         self,
-        onnx_path,
+        model_path,
         heightmap_path,
         start,
         goal,
@@ -47,7 +48,7 @@ class PathPlanning:
         z_factor=3,
     ):
 
-        self.onnx_path = onnx_path
+        self.trt_engine_path = model_path
         self.heightmap_path = heightmap_path
 
         self.start_z = start[2]
@@ -379,6 +380,92 @@ class PathPlanning:
 
         return total_length / direct_distance if direct_distance > 0 else float("inf")
 
+    def load_tensorrt_engine(self, engine_path):
+        TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
+
+        # CUDA context 초기화 확인
+        try:
+            cuda.init()
+        except:
+            pass
+
+        # 현재 디바이스 컨텍스트 가져오기
+        cuda_ctx = pycuda.autoinit.context
+
+        # Runtime과 Engine을 클래스 변수로 유지
+        runtime = trt.Runtime(TRT_LOGGER)
+        with open(engine_path, "rb") as f:
+            engine = runtime.deserialize_cuda_engine(f.read())
+
+        if engine is None:
+            raise ValueError(f"Loading TensorRT engine from: {engine_path}")
+
+        context = engine.create_execution_context()
+        stream = cuda.Stream()
+
+        input_tensor_name = None
+        output_tensor_names = []
+
+        for i in range(engine.num_io_tensors):
+            tensor_name = engine.get_tensor_name(i)
+            if engine.get_tensor_mode(tensor_name) == trt.TensorIOMode.INPUT:
+                input_tensor_name = tensor_name
+            elif engine.get_tensor_mode(tensor_name) == trt.TensorIOMode.OUTPUT:
+                output_tensor_names.append(tensor_name)
+
+        if input_tensor_name is None or not output_tensor_names:
+            raise ValueError("Input or output tensor not found.")
+
+        def infer_tensorrt(input_data):
+            try:
+                # 입력 설정
+                context.set_input_shape(input_tensor_name, input_data.shape)
+
+                # 입력 메모리 할당 및 복사
+                input_mem = cuda.mem_alloc(input_data.nbytes)
+                cuda.memcpy_htod_async(input_mem, input_data, stream)
+
+                # 출력 메모리 설정
+                output_shapes = [
+                    context.get_tensor_shape(name) for name in output_tensor_names
+                ]
+                output_mems = []
+                output_buffers = []
+
+                for shape in output_shapes:
+                    size = int(np.prod(shape) * np.dtype(np.float32).itemsize)
+                    mem = cuda.mem_alloc(size)
+                    output_mems.append(mem)
+                    output_buffers.append(np.empty(shape, dtype=np.float32))
+
+                # 텐서 주소 설정
+                context.set_tensor_address(input_tensor_name, int(input_mem))
+                for name, mem in zip(output_tensor_names, output_mems):
+                    context.set_tensor_address(name, int(mem))
+
+                # 실행
+                context.execute_async_v3(stream_handle=stream.handle)
+
+                # 결과 복사
+                for mem, buf in zip(output_mems, output_buffers):
+                    cuda.memcpy_dtoh_async(buf, mem, stream)
+
+                # 동기화
+                stream.synchronize()
+
+                return output_buffers[0] if len(output_buffers) == 1 else output_buffers
+
+            finally:
+                # 메모리 해제
+                try:
+                    input_mem.free()
+                    for mem in output_mems:
+                        mem.free()
+                except:
+                    pass
+
+        return infer_tensorrt
+
     def plan_path(self):
         # Memory Usage Check
         tracemalloc.start()
@@ -387,21 +474,20 @@ class PathPlanning:
         start_times = os.times()
         wall_clock_start = time.time()
 
-        # ONNX Path planning
-        ort_session = ort.InferenceSession(self.onnx_path)
+        # Tensor RT Path planning
+        tensorrt_infer = self.load_tensorrt_engine(self.trt_engine_path)
 
         # environment reset
-        onnx_obs, info = self.reset()  # reset은 이미 설정된 start, goal을 사용
-        onnx_obs = self._get_obs()
+        trt_obs, info = self.reset()  # reset은 이미 설정된 start, goal을 사용
+        trt_obs = self._get_obs()
 
         done = False
         while not done:
-            onnx_obs = onnx_obs.astype(np.float32)
-            onnx_obs = np.expand_dims(onnx_obs, axis=0)
-            onnx_action = ort_session.run(None, {"observation": onnx_obs})[1]
-
+            trt_obs = trt_obs.astype(np.float32)
+            trt_obs = np.expand_dims(trt_obs, axis=0)
+            trt_action = tensorrt_infer(trt_obs)[1]
             # 환경 스텝 진행
-            onnx_obs, done, _ = self.step(onnx_action)
+            trt_obs, done, _ = self.step(trt_action)
 
         # END Processing Time Check
         end_times = os.times()
@@ -410,32 +496,32 @@ class PathPlanning:
         system_time = end_times.system - start_times.system
         elapsed_wall_clock = wall_clock_end - wall_clock_start
 
-        print("ONNX Processing User CPU Time [sec] :", user_time)
-        print("ONNX Processing System CPU Time [sec] :", system_time)
-        print("ONNX Processing Wall-Clock Time [sec] :", elapsed_wall_clock)
+        print("TensorRT Processing User CPU Time [sec] :", user_time)
+        print("TensorRT Processing System CPU Time [sec] :", system_time)
+        print("TensorRT Processing Wall-Clock Time [sec] :", elapsed_wall_clock)
 
         # 최종 결과 저장
-        onnx_path = self.current_agent1_path
-        final_onnx_reward, onnx_path_ratio = self.calculate_3d_path_reward2_og_og(
+        trt_path = self.current_agent1_path
+        final_trt_reward, trt_path_ratio = self.calculate_3d_path_reward2_og_og(
             self.current_agent1_path
         )
-        print("ONNX Path Ratio :", onnx_path_ratio)
+        print("TensorRT Path Ratio :", trt_path_ratio)
 
-        self.path_x_learning = [p[1] for p in onnx_path]
-        self.path_y_learning = [p[0] for p in onnx_path]
+        self.path_x_learning = [p[1] for p in trt_path]
+        self.path_y_learning = [p[0] for p in trt_path]
         self.path_z_learning = [
-            self.heightmap[int(p[0]), int(p[1])] + self.z_factor for p in onnx_path
+            self.heightmap[int(p[0]), int(p[1])] + self.z_factor for p in trt_path
         ]
 
-        self.scaled_path_x = [p[1] * self.scale_factor_waypoint_x for p in onnx_path]
-        self.scaled_path_y = [p[0] * self.scale_factor_waypoint_y for p in onnx_path]
+        self.scaled_path_x = [p[1] * self.scale_factor_waypoint_x for p in trt_path]
+        self.scaled_path_y = [p[0] * self.scale_factor_waypoint_y for p in trt_path]
         self.scaled_path_z = [
             self.original_heightmap[
                 int(p[0] * self.scale_factor_waypoint_y),
                 int(p[1] * self.scale_factor_waypoint_x),
             ]
             * 0.1
-            for p in onnx_path
+            for p in trt_path
         ]
         self.scaled_path_z[0] = self.start_z
         self.scaled_path_z[-1] = self.goal_z
@@ -1331,7 +1417,7 @@ class PathPlanningServer(Node):  # topic 이름과 message 타입은 서로 매�
         # added by controller
         # file path
         self.image_path = "/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/map/512-001.png"
-        self.model_path = "/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/model/weight.onnx"
+        self.model_path = "/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/model/weight.onnx_fp16.trt"
 
         # path plannig complete flag
         self.path_plannig_start = False  # flag whether path planning start
