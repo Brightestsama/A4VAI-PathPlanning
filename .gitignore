@@ -3,3 +3,4 @@ __pycache__
 *.trt
 *.pyc
 Results_Images
+.vscode
