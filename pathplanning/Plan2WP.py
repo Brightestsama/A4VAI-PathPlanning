@@ -193,8 +193,8 @@ class PathPlanning:
     def plan_path(self, init, target):
 
         ### path planning by pso ###
-        start_pso = np.array([[init[0], init[1]]])
-        goal_pso = np.array([[target[0], target[1]]])
+        start_pso = np.array([[init[1], init[0]]])
+        goal_pso = np.array([[target[1], target[0]]])
         # with multiprocessing.Pool(processes=4) as pool:
         #     print("### PSO Multi Processing Start ###")
         #     inputs = [(self.heightmap, start_pso, goal_pso, self.h_origin) for _ in range(10)]
@@ -209,17 +209,19 @@ class PathPlanning:
         best_waypoint = None
 
         for _ in range(main_iter):
-            gBest_value, waypoint = self.pso_single(
+            gBest_value, waypoint = self.pso_single( # y, x, z
                 self.heightmap, start_pso, goal_pso, self.h_origin
             )
             if gBest_value < best_value:
                 best_value = gBest_value
                 best_waypoint = waypoint
-
+        
         waypoint = best_waypoint.reshape(-1, 2)
 
-        self.path_x_pso = waypoint[:, 0]
-        self.path_y_pso = waypoint[:, 1]
+        waypoint_full = np.vstack((start_pso, waypoint, goal_pso))  # shape: (N+2, 2)
+
+        self.path_x_pso = waypoint_full[:, 0] # y, x, z
+        self.path_y_pso = waypoint_full[:, 1]
 
         self.path_z_pso = (
             np.array(
@@ -227,12 +229,15 @@ class PathPlanning:
                     self.heightmap[round(point[0] - 1), round(point[1] - 1)]
                     for point in waypoint
                 ]
-            )
-            + self.z_factor
+            ) * 0.1
         )
-        self.path_x = self.path_x_pso
-        self.path_y = self.path_y_pso
-        self.path_z = self.path_z_pso
+
+        self.path_z_pso = np.r_[init[2], self.path_z_pso, target[2]]
+
+        self.path_x = self.path_y_pso # x, y, z
+        self.path_y = self.path_x_pso
+        self.path_z = self.path_z_pso + self.z_factor
+
         # self.path_x,self.path_y,self.path_z = self.add_waypoint_main(self.path_x_pso,self.path_y_pso,self.path_z_pso,self.heightmap*0.1)
 
         ### OUTPUT ###
