@@ -234,6 +234,13 @@ class PathPlanning:
 
         self.path_z_pso = np.r_[init[2], self.path_z_pso, target[2]]
 
+        self.path_x_pso, self.path_y_pso, self.path_z_pso = self.add_waypoint_main_2( # y, x, z
+            self.path_x_pso,
+            self.path_y_pso,
+            self.path_z_pso,
+            self.heightmap * 0.1,
+        )
+
         self.path_x = self.path_y_pso # x, y, z
         self.path_y = self.path_x_pso
         self.path_z = self.path_z_pso + self.z_factor
