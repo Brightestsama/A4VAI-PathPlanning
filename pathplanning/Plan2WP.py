@@ -45,9 +45,9 @@ class PathPlanning:
         n_waypoints=8,
         scale_factor=10,
         image_size=80,
-        z_factor=0.5,
+        z_factor=4,
     ):
-        
+
         self.model_path = model_path
         self.heightmap_path = heightmap_path
 
@@ -77,15 +77,15 @@ class PathPlanning:
         )  # Scale Factor of waypoint
 
         # PSO parameters
-        self.num_particles = 140
+        self.num_particles = 200
         self.num_dimensions = 1
-        self.margin_area_ratio = 0.333
+        self.margin_area_ratio = 0.5
         self.num_waypoints = n_waypoints
         self.dimensionality = self.num_waypoints * self.num_dimensions
         self.max_iter = 15000
         self.w = 0.5
-        self.c1 = 2
-        self.c2 = 2
+        self.c1 = 2.05
+        self.c2 = 2.05
 
         # Check distance between start and goal
         if np.linalg.norm(np.array(start) - np.array(goal)) < self.distance:
@@ -209,18 +209,18 @@ class PathPlanning:
         best_waypoint = None
 
         for _ in range(main_iter):
-            gBest_value, waypoint = self.pso_single( # y, x, z
+            gBest_value, waypoint = self.pso_single(  # y, x, z
                 self.heightmap, start_pso, goal_pso, self.h_origin
             )
             if gBest_value < best_value:
                 best_value = gBest_value
                 best_waypoint = waypoint
-        
+
         waypoint = best_waypoint.reshape(-1, 2)
 
         waypoint_full = np.vstack((start_pso, waypoint, goal_pso))  # shape: (N+2, 2)
 
-        self.path_x_pso = waypoint_full[:, 0] # y, x, z
+        self.path_x_pso = waypoint_full[:, 0]  # y, x, z
         self.path_y_pso = waypoint_full[:, 1]
 
         self.path_z_pso = (
@@ -229,20 +229,27 @@ class PathPlanning:
                     self.heightmap[round(point[0] - 1), round(point[1] - 1)]
                     for point in waypoint
                 ]
-            ) * 0.1
+            )
+            * 1
         )
 
         self.path_z_pso = np.r_[init[2], self.path_z_pso, target[2]]
 
-        self.path_x_pso, self.path_y_pso, self.path_z_pso = self.add_waypoint_main_2( # y, x, z
-            self.path_x_pso,
-            self.path_y_pso,
-            self.path_z_pso,
-            self.heightmap * 0.1,
-        )
+        # self.path_x_pso, self.path_y_pso, self.path_z_pso = (
+        #     self.add_waypoint_main_2(  # y, x, z
+        #         self.path_x_pso,
+        #         self.path_y_pso,
+        #         self.path_z_pso,
+        #         self.heightmap * 1,
+        #     )
+        # )
 
-        self.path_x = self.path_y_pso # x, y, z
-        self.path_y = self.path_x_pso
+        # self.path_x = self.path_y_pso  # x, y, z
+        # self.path_y = self.path_x_pso
+        # self.path_z = self.path_z_pso + self.z_factor
+
+        self.path_x = self.path_x_pso  # x, y, z
+        self.path_y = self.path_y_pso
         self.path_z = self.path_z_pso + self.z_factor
 
         # self.path_x,self.path_y,self.path_z = self.add_waypoint_main(self.path_x_pso,self.path_y_pso,self.path_z_pso,self.heightmap*0.1)
@@ -258,6 +265,9 @@ class PathPlanning:
         # path = "/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/Results_Images"
 
         #         # 경로생성 결과 확인용
+        self.path_data(
+            "/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/Results_Images/waypoint.txt"
+        )
         self.plot_path_2d(
             "/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/Results_Images/path_2d.png"
         )
@@ -482,7 +492,8 @@ class PathPlanning:
         heightmap,
         vertical_length_st,
         length_heightmap,
-        K=10):
+        K=10,
+    ):
         """
         완전 벡터화된 cost 계산:
         • Start, Goal: (1, 2)   (pixel 좌표)
@@ -943,6 +954,18 @@ class PathPlanning:
                             weight = max(weight, 1e-6)  # 가중치가 0이 되지 않도록 함
                             graph.add_edge(tuple(node1), tuple(node2), weight=weight)
         return graph
+
+    def path_data(self, output_path):
+
+        waypoint_x = self.path_x
+        waypoint_y = self.path_y
+        waypoint_z = self.path_z
+
+        np.savetxt(
+            output_path,
+            np.column_stack([waypoint_x, waypoint_y, waypoint_z]),
+            fmt="%.6f",
+        )
 
     def plot_path_2d(self, output_path):
         plt.figure(figsize=(10, 10))
@@ -1438,7 +1461,7 @@ class PathPlanningServer(Node):  # topic 이름과 message 타입은 서로 매�
         #############################################################################################################
         # added by controller
         # file path
-        self.image_path = "/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/map/512-001.png"
+        self.image_path = "/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/map/expanded-1000.png"
         self.model_path = "/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/model/weight.onnx_fp16.trt"
 
         # path plannig complete flag
