@@ -1,0 +1,17 @@
+[project]
+name = "pathplanning"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "matplotlib>=3.10.7",
+    "numba>=0.62.1",
+    "numpy>=2.2.6",
+    "opencv-python>=4.11.0.86",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.5",
+]
