@@ -14,6 +14,7 @@ class PathPlannerCore:
         self.start = start
         self.goal = goal
         self.z_offset = z_offset
+        self.height_scale = height_scale
 
         self.heightmap_uint16 = self.load_heightmap(heightmap_path)
         self.H, self.W = self.heightmap_uint16.shape
@@ -119,7 +120,7 @@ class PathPlannerCore:
         # scale back to meters
         path_x = [p[0] for p in path]
         path_y = [p[1] for p in path]
-        path_z = [self.heightmap[p[1],p[0]] * height_scale + self.z_offset for p in path] # row(y), col(x)
+        path_z = [self.heightmap[p[1],p[0]] * self.height_scale + self.z_offset for p in path] # row(y), col(x)
 
         return path_x, path_y, path_z
 
