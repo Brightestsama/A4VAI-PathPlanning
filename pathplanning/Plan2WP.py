@@ -262,7 +262,10 @@ class PathPlanning:
 
         # print("Output path of learning model :",path_final_3D_learning_model)
         # print("Output Real Path", path_final_3D)
-        # path = "/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/Results_Images"
+        results_path = "/home/user/workspace/ros2/ros2_ws/src/pathplanning/pathplanning/Results_Images"
+
+        if not os.path.exists(results_path):
+            os.makedirs(results_path)
 
         #         # 경로생성 결과 확인용
         self.path_data(
